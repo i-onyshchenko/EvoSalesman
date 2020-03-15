@@ -1,22 +1,12 @@
+#!/usr/bin/env python3.6
 #  by Ihor Onyshchenko
 
+
 from Pyro4 import expose
-import numpy as np, random, operator, pandas as pd, matplotlib.pyplot as plt
-
-
-class City:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-
-    def distance(self, city):
-        xDis = abs(self.x - city.x)
-        yDis = abs(self.y - city.y)
-        distance = np.sqrt((xDis ** 2) + (yDis ** 2))
-        return distance
-
-    def __repr__(self):
-        return "(" + str(self.x) + "," + str(self.y) + ")"
+import numpy as np
+import pandas as pd
+import random
+import operator
 
 
 class Fitness:
@@ -24,6 +14,12 @@ class Fitness:
         self.route = route
         self.distance = 0
         self.fitness = 0.0
+
+    def cityDistance(self, city1, city2):
+        xDis = abs(city1[0] - city2[0])
+        yDis = abs(city1[1] - city2[1])
+        distance = np.sqrt((xDis ** 2) + (yDis ** 2))
+        return distance
 
     def routeDistance(self):
         if self.distance == 0:
@@ -35,7 +31,7 @@ class Fitness:
                     toCity = self.route[i + 1]
                 else:
                     toCity = self.route[0]
-                pathDistance += fromCity.distance(toCity)
+                pathDistance += self.cityDistance(fromCity, toCity)
             self.distance = pathDistance
         return self.distance
 
@@ -89,6 +85,7 @@ class Solver:
                 if pick <= df.iat[i, 3]:
                     selectionResults.append(popRanked[i][0])
                     break
+
         return selectionResults
 
     @staticmethod
@@ -101,11 +98,12 @@ class Solver:
     def myreduce(mapped):
         res = []
         for x in mapped:
-            res += x
+            res = res + x.value
 
         return res
 
     @staticmethod
+    @expose
     def breed(parent1, parent2):
         geneA = int(random.random() * len(parent1))
         geneB = int(random.random() * len(parent1))
@@ -125,9 +123,10 @@ class Solver:
         return [Solver.breed(*par) for par in parents]
 
     @staticmethod
+    @expose
     def mutate(individual, mutationRate):
         for swapped in range(len(individual)):
-            if (random.random() < mutationRate):
+            if random.random() < mutationRate:
                 swapWith = int(random.random() * len(individual))
 
                 city1 = individual[swapped]
@@ -139,7 +138,7 @@ class Solver:
 
     @staticmethod
     @expose
-    def mutateChunk(self, individuals, mutationRate):
+    def mutateChunk(individuals, mutationRate):
         return [Solver.mutate(ind, mutationRate) for ind in individuals]
 
     def breedPopulation(self, matingpool, eliteSize):
@@ -148,41 +147,38 @@ class Solver:
         pool = random.sample(matingpool, len(matingpool))
 
         parents = [[pool[i], pool[len(matingpool) - i - 1]] for i in range(length)]
-        chunks = np.split(parents, len(self.workers))
+        chunks = np.split(np.array(parents), len(self.workers))
+        chunks = [chunk.tolist() for chunk in chunks]
 
-        mapped = []
-        for i in range(len(self.workers)):
-            mapped.append(self.workers[i].breedChunk(chunks[i]))
+        mapped = [self.workers[i].breedChunk(chunks[i]) for i in range(len(self.workers))]
 
         return children + self.myreduce(mapped)
 
     def mutatePopulation(self, population, mutationRate):
-        chunks = np.split(population, len(self.workers))
+        chunks = np.split(np.array(population), len(self.workers))
+        chunks = [chunk.tolist() for chunk in chunks]
 
-        mapped = []
-        for i in range(len(self.workers)):
-            mapped.append(self.workers[i].mutateChunk(chunks[i], mutationRate))
+        mapped = [self.workers[i].mutateChunk(chunks[i], mutationRate) for i in range(len(self.workers))]
 
-        mutatedPop = self.myreduce(mapped)
-        return mutatedPop
+        return self.myreduce(mapped)
 
     def nextGeneration(self, currentGen, eliteSize, mutationRate):
-        popRanked = Solver.rankRoutes(currentGen)
-        selectionResults = Solver.selection(popRanked, eliteSize)
-        matingpool = Solver.matingPool(currentGen, selectionResults)
+        popRanked = self.rankRoutes(currentGen)
+        selectionResults = self.selection(popRanked, eliteSize)
+        matingpool = self.matingPool(currentGen, selectionResults)
         children = self.breedPopulation(matingpool, eliteSize)
         nextGeneration = self.mutatePopulation(children, mutationRate)
         return nextGeneration
 
     def geneticAlgorithm(self, population, popSize, eliteSize, mutationRate, generations):
-        pop = Solver.initialPopulation(popSize, population)
-        print("Initial distance: " + str(1 / Solver.rankRoutes(pop)[0][1]))
+        pop = self.initialPopulation(popSize, population)
+        print("Initial distance: " + str(1 / self.rankRoutes(pop)[0][1]))
 
         for i in range(generations):
             pop = self.nextGeneration(pop, eliteSize, mutationRate)
 
-        print("Final distance: " + str(1 / Solver.rankRoutes(pop)[0][1]))
-        bestRouteIndex = Solver.rankRoutes(pop)[0][0]
+        print("Final distance: " + str(1 / self.rankRoutes(pop)[0][1]))
+        bestRouteIndex = self.rankRoutes(pop)[0][0]
         bestRoute = pop[bestRouteIndex]
         return bestRoute
 
@@ -192,27 +188,22 @@ class Solver:
         self.write_output(bestRoute)
 
     def read_input(self):
-        pass
+        with open(self.input_file_name, 'r+') as f:
+            lines = f.readlines()
+            num_cities = int(lines[0])
+            self.cities = [list(map(lambda x: int(x), lines[i].split(','))) for i in range(1, num_cities+1)]
+            self.popSize = int(lines[num_cities+1])
+            self.eliteSize = int(lines[num_cities+2])
+            self.mutationRate = float(lines[num_cities+3])
+            self.generations = int(lines[num_cities+4])
 
     def write_output(self, route):
-        pass
-
-    def geneticAlgorithmPlot(self, population, popSize, eliteSize, mutationRate, generations):
-        pop = Solver.initialPopulation(popSize, population)
-        progress = [1 / Solver.rankRoutes(pop)[0][1]]
-
-        for i in range(generations):
-            pop = self.nextGeneration(pop, eliteSize, mutationRate)
-            progress.append(1 / Solver.rankRoutes(pop)[0][1])
-
-        plt.plot(progress)
-        plt.ylabel('Distance')
-        plt.xlabel('Generation')
-        plt.show()
+        with open(self.output_file_name, 'w+') as f:
+            route = "->".join(list(map(str, route)))
+            f.write(route)
 
 
 if __name__ == "__main__":
-    cityList = [City(x=int(random.random() * 200), y=int(random.random() * 200)) for i in range(25)]
+    cityList = [[int(random.random() * 200), int(random.random() * 200)] for i in range(25)]
 
-    # geneticAlgorithm(population=cityList, popSize=100, eliteSize=20, mutationRate=0.01, generations=500)
-    Solver().geneticAlgorithmPlot(population=cityList, popSize=100, eliteSize=20, mutationRate=0.01, generations=500)
+    Solver([Solver(), Solver()], 'input.txt', 'output.txt').solve()
